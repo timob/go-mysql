@@ -58,7 +58,7 @@ http://mysql.rjweb.org/doc.php/charcoll before using this option.
 
 ### Client Multi Results
 
-Whith `client-multi-results` parametetr, it is possible to call stored
+Whith `client-multi-results` parameter, it is possible to call stored
 procedures which return a result set. Query() methods from the database/sql
 package when passed a query that calls such a procedure will use the returned
 result set. Exec() methods will get rowsAffected/lastInsertId from such a
