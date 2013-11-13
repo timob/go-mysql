@@ -24,6 +24,7 @@ Requires Go >= 1.0.3 and MySQL >= 4.1
 * `socket` : unix domain socket (default `/var/run/mysqld/mysqld.sock`)
 * `debug` : log requests and MySQL warnings to the standard logger
 * `charset` : set connection character set (read note below)
+* `client-multi-results` : set CLIENT_MULTI_RESULTS capability flag (read note below)
 
 ### Examples
 
@@ -54,6 +55,17 @@ may need to trick the server not to translate to/from UTF-8. The
 `charset` parameter allows you to set the character set on a connection
 basis (a `SET NAMES` statement is executed on connect). Please review
 http://mysql.rjweb.org/doc.php/charcoll before using this option.
+
+### Client Multi Results
+
+Whith `client-multi-results` parametetr, it is possible to call stored
+procedures which return a result set. Query() methods from the database/sql
+package when passed a query that calls such a procedure will use the returned
+result set. Exec() methods will get rowsAffected/lastInsertId from such a
+procedure discarding the result set. Any other returned result sets from such a
+procedure will be discarded. (Note: This is implemented in the code so that
+multiple result sets could be used. Maybe someone could make an inteface for
+this.)
 
 ## Installation
 

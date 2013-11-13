@@ -20,9 +20,14 @@ const (
 	dsn2 = "mysql://gopher2:secret@localhost:3306/test?strict"
 	dsn3 = "mysqls://gopher1@localhost?strict&ssl-insecure-skip-verify"
 	dsn4 = "mysql://gopher2:secret@(unix)/test?strict&socket=/var/lib/mysql/mysql.sock"
+	dsn5 = "mysql://gopher2:secret@localhost:3306/test?strict&client-multi-results"
 )
 
 func TestTypes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping test in short mode")
+	}
+
 	db, err := sql.Open("mysql", dsn2)
 	if err != nil {
 		t.Fatal(err)
@@ -469,6 +474,10 @@ func TestParseVersion(t *testing.T) {
 }
 
 func TestSuite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping test in short mode")
+	}
+
 	db, err := sql.Open("mysql", dsn2)
 	if err != nil {
 		t.Fatal(err)
@@ -476,4 +485,155 @@ func TestSuite(t *testing.T) {
 	defer db.Close()
 
 	sqltest.RunTests(t, db, sqltest.MYSQL)
+}
+
+func TestStoredProcedureResultSet(t *testing.T) {
+	db, err := sql.Open("mysql", dsn5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	defer db.Exec(`drop procedure proc_w_error`)
+	defer db.Exec(`drop procedure proc_w_warning`)
+	defer db.Exec(`drop procedure proc_w_resultset`)
+	defer db.Exec(`drop table letters`)
+	_, err = db.Exec(`create table letters(x varchar(1))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`create procedure proc_w_resultset() begin select 1; select 2; insert into letters values('a'); end`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`create procedure proc_w_error() begin select 1; insert into nothere values(1); end`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`create procedure proc_w_warning() begin insert into letters values('ab');  select 1; end`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resultSetQuery := `call proc_w_resultset`
+	result, err := db.Exec(resultSetQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("Exec retured incorrect number of rows affected, %d", n)
+	}
+
+	stmt, err := db.Prepare(resultSetQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = stmt.Exec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err = result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatal("Exec retured incorrect number of rows affected")
+	}
+
+	rows, err := db.Query(resultSetQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c) != 1 || c[0] != "1" {
+		t.Fatal("rows.Columns returned incorrectly")
+	}
+	for rows.Next() {
+		var i int
+		err := rows.Scan(&i)
+		if i != 1 {
+			t.Fatal("incorrect row value")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = rows.Err()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stmt, err = db.Prepare(resultSetQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err = stmt.Query()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c) != 1 || c[0] != "1" {
+		t.Fatal("rows.Columns returned incorrectly")
+	}
+	for rows.Next() {
+		var i int
+		err := rows.Scan(&i)
+		if i != 1 {
+			t.Fatal("incorrect row value")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = rows.Err()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec(`call proc_w_error()`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	_, err = db.Exec(`call proc_w_warning()`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	rows, err = db.Query(`call proc_w_warning()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c) != 1 || c[0] != "1" {
+		t.Fatal("rows.Columns returned incorrectly")
+	}
+	for rows.Next() {
+		var i int
+		err := rows.Scan(&i)
+		if i != 1 {
+			t.Fatal("incorrect row value")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = rows.Err()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
 }

@@ -21,6 +21,7 @@ const (
 	CLIENT_SECURE_CONNECTION = 32768  /* New 4.1 authentication */
 	CLIENT_MULTI_STATEMENTS  = 65536  /* Enable/disable multi-stmt support */
 	CLIENT_MULTI_RESULTS     = 131072 /* Enable/disable multi-results */
+	CLIENT_PS_MULTI_RESULTS  = 262144 /* Multi-results in PS-protocol */
 )
 
 const (
@@ -133,4 +134,8 @@ const (
 	EOF          = 0xfe
 	LOCAL_INFILE = 0xfb
 	ERR          = 0xff
+)
+
+const (
+	SERVER_MORE_RESULTS_EXISTS = 8
 )

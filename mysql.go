@@ -45,6 +45,7 @@ type conn struct {
 	allowLocalInfile   bool
 	charset            string
 	seq                byte
+	clientMultiResults bool
 }
 
 type stmt struct {
@@ -121,6 +122,8 @@ func connect(dsn string) (*conn, error) {
 			cn.socket = v[0]
 		case "strict":
 			cn.strict = true
+		case "client-multi-results":
+			cn.clientMultiResults = true
 		default:
 			return nil, fmt.Errorf("invalid parameter: %s", k)
 		}
@@ -262,6 +265,9 @@ func (cn *conn) writeHello(challange []byte, flags uint32) error {
 	flags |= CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_LOCAL_FILES
 	if len(cn.db) > 0 {
 		flags |= CLIENT_CONNECT_WITH_DB
+	}
+	if cn.clientMultiResults {
+		flags |= CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS
 	}
 	p.WriteUint32(flags)
 	p.WriteUint32(MAX_PACKET_SIZE)
@@ -427,31 +433,13 @@ func (cn *conn) query(query string) (r *result, err error) {
 	if err = cn.sendPacket(p); err != nil {
 		return nil, err
 	}
-	if p, err = cn.recvPacket(); err != nil {
-		return nil, err
-	}
 
 	r = &result{cn: cn}
 
-	switch p.FirstByte() {
-	case OK:
-		if err = r.ReadOK(&p); err != nil {
-			return nil, err
-		}
-	case ERR:
-		return nil, p.ReadErr()
-	case LOCAL_INFILE:
-		p.ReadUint8()
-		fn := string(p.Bytes())
-		if err := cn.sendLocalFile(r, fn); err != nil {
-			return nil, err
-		}
-	default:
-		n, _ := p.ReadLCUint64()
-		if r.columns, err = cn.readColumns(int(n)); err != nil {
-			return nil, err
-		}
+	if err = r.readResponse(); err != nil {
+		return nil, err
 	}
+
 	return r, nil
 }
 
@@ -631,25 +619,13 @@ func (st *stmt) query(args []driver.Value) (r *result, err error) {
 	if err = st.cn.sendPacket(p); err != nil {
 		return nil, err
 	}
-	if p, err = st.cn.recvPacket(); err != nil {
-		return nil, err
-	}
 
 	r = &result{cn: st.cn, binary: true}
 
-	switch p.FirstByte() {
-	case OK:
-		if err = r.ReadOK(&p); err != nil {
-			return nil, err
-		}
-	case ERR:
-		return nil, p.ReadErr()
-	default:
-		n, _ := p.ReadLCUint64()
-		if r.columns, err = st.cn.readColumns(int(n)); err != nil {
-			return nil, err
-		}
+	if err = r.readResponse(); err != nil {
+		return nil, err
 	}
+
 	return r, nil
 }
 
@@ -673,6 +649,39 @@ func (r *result) ReadOK(p *packet) error {
 	r.rowsAffected, r.lastInsertId, r.warnings = p.ReadOK()
 	r.closed = true
 	return r.ReadWarnings()
+}
+
+func (r *result) readResponse() (err error) {
+	p, err := r.cn.recvPacket()
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case p.FirstByte() == OK:
+		if err = r.ReadOK(&p); err != nil {
+			return err
+		}
+	case p.FirstByte() == ERR:
+		r.closed = true
+		err = p.ReadErr()
+		if r.cn.debug {
+			log.Printf("%v", err)
+		}
+		return err
+	case r.binary == false && p.FirstByte() == LOCAL_INFILE:
+		p.ReadUint8()
+		fn := string(p.Bytes())
+		if err = r.cn.sendLocalFile(r, fn); err != nil {
+			return err
+		}
+	default:
+		n, _ := p.ReadLCUint64()
+		if r.columns, err = r.cn.readColumns(int(n)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *result) ReadWarnings() error {
@@ -748,13 +757,41 @@ func (r *result) Next(dest []driver.Value) (err error) {
 		return p.ReadErr()
 	case p.FirstByte() == EOF && p.Len() <= 8: // can be LC integer
 		r.warnings, r.status = p.ReadEOF()
-		r.closed = true
-		switch err := r.ReadWarnings(); err {
-		case nil:
-			return io.EOF
-		default:
-			return err
+		err := r.ReadWarnings()
+
+		// Read anymore results, if multiple errors are encounterd return first
+		// error.
+		nerr := io.EOF
+		if r.status&SERVER_MORE_RESULTS_EXISTS != 0 {
+			nr := &result{cn: r.cn, binary: r.binary}
+			nerr = nr.readResponse()
+			if nr.closed == false {
+				for {
+					nerr = r.Next(nil)
+					if nerr != nil {
+						break
+					}
+				}
+			} else if nerr == nil { // ok packet received with no strict errors
+				nerr = io.EOF
+			}
+
+			if nr.rowsAffected != 0 || r.lastInsertId != 0 {
+				r.rowsAffected = nr.rowsAffected
+				r.lastInsertId = nr.lastInsertId
+			}
+			if nerr != io.EOF && err != nil {
+				r.warnings = nr.warnings
+			}
 		}
+
+		r.closed = true
+		if err != nil {
+			return err
+		} else if nerr != io.EOF {
+			return nerr
+		}
+		return io.EOF
 	default:
 		if r.binary {
 			if h := p.ReadUint8(); h != 0 {
