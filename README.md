@@ -62,10 +62,8 @@ Whith `client-multi-results` parameter, it is possible to call stored
 procedures which return a result set. Query() methods from the database/sql
 package when passed a query that calls such a procedure will use the returned
 result set. Exec() methods will get rowsAffected/lastInsertId from such a
-procedure discarding the result set. Any other returned result sets from such a
-procedure will be discarded. (Note: This is implemented in the code so that
-multiple result sets could be used. Maybe someone could make an inteface for
-this.)
+procedure discarding the result set. Only the first result set is used. Any other
+returned result sets from a stored procedure will be discarded.
 
 ## Installation
 
