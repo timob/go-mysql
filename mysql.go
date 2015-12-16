@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type mysql struct{}
@@ -77,8 +78,14 @@ type result struct {
 	status       uint16
 }
 
+var connTimeout time.Duration
+
 func init() {
 	sql.Register("mysql", &mysql{})
+}
+
+func SetTimeout(t time.Duration) {
+	connTimeout = t
 }
 
 func (d *mysql) Open(name string) (driver.Conn, error) {
@@ -154,9 +161,9 @@ func connect(dsn string) (*conn, error) {
 	}
 
 	if u.Host == "(unix)" {
-		cn.netconn, err = net.Dial("unix", cn.socket)
+		cn.netconn, err = net.DialTimeout("unix", cn.socket, connTimeout)
 	} else {
-		cn.netconn, err = net.Dial("tcp", fmt.Sprintf("%s:%d", cn.host, cn.port))
+		cn.netconn, err = net.DialTimeout("tcp", fmt.Sprintf("%s:%d", cn.host, cn.port), connTimeout)
 	}
 	if err != nil {
 		return nil, err
