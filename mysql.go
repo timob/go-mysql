@@ -47,6 +47,8 @@ type conn struct {
 	charset            string
 	seq                byte
 	clientMultiResults bool
+	autoReconnect      bool
+	dsn				   string
 }
 
 type stmt struct {
@@ -103,7 +105,7 @@ func connect(dsn string) (*conn, error) {
 		return nil, fmt.Errorf("invalid dsn: %s", dsn)
 	}
 
-	cn := &conn{host: "localhost", port: 3306, user: "root", socket: "/var/run/mysqld/mysqld.sock"}
+	cn := &conn{host: "localhost", port: 3306, user: "root", socket: "/var/run/mysqld/mysqld.sock", dsn: dsn}
 
 	switch u.Scheme {
 	case "mysql":
@@ -131,6 +133,8 @@ func connect(dsn string) (*conn, error) {
 			cn.strict = true
 		case "client-multi-results":
 			cn.clientMultiResults = true
+		case "auto-reconnect":
+			cn.autoReconnect = true
 		default:
 			return nil, fmt.Errorf("invalid parameter: %s", k)
 		}
@@ -160,7 +164,7 @@ func connect(dsn string) (*conn, error) {
 		cn.db = path[1]
 	}
 
-	if u.Host == "(unix)" {
+	if cn.host == "(unix)" {
 		cn.netconn, err = net.DialTimeout("unix", cn.socket, connTimeout)
 	} else {
 		cn.netconn, err = net.DialTimeout("tcp", fmt.Sprintf("%s:%d", cn.host, cn.port), connTimeout)
@@ -176,13 +180,14 @@ func connect(dsn string) (*conn, error) {
 	cn.bufrd = bufio.NewReader(cn.netconn)
 
 	if cn.debug {
-		log.Printf("connected: %s #%d (%s)\n", dsn, cn.connId, cn.serverVersion)
+		log.Printf("connected: %s #%d (%s)\n", cn.host, cn.connId, cn.serverVersion)
 	}
 	if cn.charset != "" {
 		if _, err := cn.Exec("SET NAMES "+cn.charset, nil); err != nil {
 			return nil, err
 		}
 	}
+
 	return cn, nil
 }
 
@@ -437,8 +442,20 @@ func (cn *conn) query(query string) (r *result, err error) {
 	}
 	p := cn.newComPacket(COM_QUERY)
 	p.WriteString(query)
-	if err = cn.sendPacket(p); err != nil {
-		return nil, err
+
+	err = cn.sendPacket(p);
+	if err != nil && cn.autoReconnect {
+		log.Println("WARN go-mysql connection lost, reconnecting")
+		conn, err := connect(cn.dsn)
+		if err != nil {
+			return nil, err
+		}
+		*cn = *conn
+		p := cn.newComPacket(COM_QUERY)
+		p.WriteString(query)
+		if err = cn.sendPacket(p); err != nil {
+			return nil, err
+		}
 	}
 
 	r = &result{cn: cn}
@@ -460,8 +477,19 @@ func (cn *conn) Prepare(query string) (driver.Stmt, error) {
 func (cn *conn) prepare(query string) (st *stmt, err error) {
 	p := cn.newComPacket(COM_STMT_PREPARE)
 	p.WriteString(query)
-	if err := cn.sendPacket(p); err != nil {
-		return nil, err
+	err = cn.sendPacket(p);
+	if err != nil && cn.autoReconnect {
+		log.Println("WARN go-mysql connection lost, reconnecting")
+		conn, err := connect(cn.dsn)
+		if err != nil {
+			return nil, err
+		}
+		*cn = *conn
+		p := cn.newComPacket(COM_STMT_PREPARE)
+		p.WriteString(query)
+		if err := cn.sendPacket(p); err != nil {
+			return nil, err
+		}
 	}
 	if p, err = cn.recvPacket(); err != nil {
 		return nil, err

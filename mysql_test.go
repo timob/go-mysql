@@ -3,7 +3,7 @@ package mysql
 // driver specific test. general database/sql tests are in ./sqltest.
 
 import (
-	"./sqltest"
+	"github.com/timob/go-mysql/sqltest"
 	"bytes"
 	"database/sql"
 	"fmt"
