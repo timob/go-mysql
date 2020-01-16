@@ -3,10 +3,10 @@ package mysql
 // driver specific test. general database/sql tests are in ./sqltest.
 
 import (
-	"github.com/timob/go-mysql/sqltest"
 	"bytes"
 	"database/sql"
 	"fmt"
+	"github.com/timob/go-mysql/sqltest"
 	"io/ioutil"
 	"os"
 	"reflect"
@@ -636,4 +636,46 @@ func TestStoredProcedureResultSet(t *testing.T) {
 		t.Fatal("expected error")
 	}
 
+}
+
+// Test that when connection is killed the driver will return `driver.ErrBadConn`
+// so that database/sql package will reconnect.
+func TestReconnect(t *testing.T) {
+	db, err := sql.Open("mysql", dsn5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var connId int
+	err = db.QueryRow("select connection_id()").Scan(&connId)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wait := make(chan struct{})
+	go func() {
+		db, err := sql.Open("mysql", dsn5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.Exec(fmt.Sprintf("kill %d", connId))
+		if err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+		wait <- struct{}{}
+	}()
+
+	<-wait
+
+	var connId2 int
+	err = db.QueryRow("select connection_id()").Scan(&connId2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if connId2 == connId {
+		t.Error("unexepected connection id, same as one that was killed")
+	}
 }
