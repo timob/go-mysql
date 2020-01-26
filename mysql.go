@@ -371,7 +371,8 @@ func (cn *conn) Close() (err error) {
 	if err := cn.sendPacket(p); err != nil {
 		return err
 	}
-	if _, err = cn.recvPacket(); err != nil {
+	// err != driver.ErrBadConn bc server is allowed to drop connection
+	if _, err = cn.recvPacket(); err != nil && err != driver.ErrBadConn {
 		return err
 	}
 	return cn.netconn.Close()
